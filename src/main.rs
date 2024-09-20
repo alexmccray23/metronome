@@ -23,117 +23,6 @@ fn play_tick(stream_handle: &OutputStreamHandle) {
     sink.detach();
 }
 
-fn main() {
-    // Capture command line arguments
-    let (start_bpm, end_bpm, duration, measures) = capture_arguments();
-
-    // Get an output stream handle to the default physical sound device
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-
-    // Calculate total steps (beats)
-    let total_steps = duration.map_or(u32::MAX, |dur| {
-        // Calculate number of beats over the duration
-        let average_bpm = (start_bpm + end_bpm) / 2.0_f64;
-        (average_bpm * (dur / 60.0)).round() as u32
-    });
-
-    // Calculate BPM increment per step
-    if let Some(measures) = measures {
-        let bpm_increment = if total_steps > 0 {
-            f64::from(measures) * (end_bpm - start_bpm) / f64::from(total_steps)
-        } else {
-            0.0
-        };
-
-        let mut current_bpm = start_bpm;
-
-        for beat in 0..total_steps {
-            // Play the metronome tick
-            play_tick(&stream_handle);
-            if beat == 0 {
-                println!("{current_bpm:.2} BPM");
-            }
-
-            // Calculate duration between beats
-            let beat_duration = 60.0 / current_bpm;
-
-            // Wait for the beat duration
-            sleep(Duration::from_secs_f64(beat_duration));
-
-            // Update BPM
-            if beat % measures == measures - 1 {
-                current_bpm += bpm_increment;
-                println!("{current_bpm:.2} BPM");
-            }
-        }
-    }
-    println!("{end_bpm:.2} BPM");
-
-    // Shared BPM variable
-    let bpm = Arc::new(Mutex::new(end_bpm));
-
-    // Clone the Arc to move into the input thread
-    let bpm_clone = Arc::clone(&bpm);
-
-    // Enable raw mode to capture key presses without enter key
-    enable_raw_mode().expect("Failed to enable raw mode");
-
-    // Input thread to listen for key presses
-    thread::spawn(move || {
-        loop {
-            // Read an event
-            if let Ok(Event::Key(key_event)) = read() {
-                let mut bpm = bpm_clone.lock().unwrap();
-                match key_event.code {
-                    KeyCode::Char('k') => {
-                        *bpm += 1.0;
-                        println!("{:.2} BPM\r", *bpm);
-                        drop(bpm);
-                    }
-                    KeyCode::Char('j') => {
-                        if *bpm > 1.0 {
-                            *bpm -= 1.0;
-                            println!("{:.2} BPM\r", *bpm);
-                            drop(bpm);
-                        }
-                    }
-                    KeyCode::Char('q') => {
-                        println!("Exiting metronome.\r");
-                        drop(bpm);
-                        disable_raw_mode().expect("Failed to disable raw mode\r");
-                        std::process::exit(0);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
-    let mut next_beat = Instant::now();
-
-    // Continue at end BPM if desired
-    loop {
-        // Get the current BPM
-        let current_bpm = {
-            let bpm = bpm.lock().unwrap();
-            *bpm
-        };
-
-        play_tick(&stream_handle);
-
-        let beat_duration = 60.0 / current_bpm;
-
-        next_beat += Duration::from_secs_f64(beat_duration);
-
-        let now = Instant::now();
-
-        if next_beat > now {
-            sleep(next_beat - now);
-        } else {
-            next_beat = now;
-        }
-    }
-}
-
 fn capture_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
     // Set up command-line argument parsing
     let matches = Command::new("Metronome")
@@ -204,4 +93,134 @@ fn capture_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
     );
 
     (start_bpm, end_bpm, duration, measures)
+}
+
+fn key_press_event(bpm: &Arc<Mutex<f64>>) {
+    // Clone the Arc to move into the input thread
+    let bpm_clone = Arc::clone(bpm);
+
+    // Enable raw mode to capture key presses without enter key
+    enable_raw_mode().expect("Failed to enable raw mode");
+
+    // Input thread to listen for key presses
+    thread::spawn(move || {
+        loop {
+            // Read an event
+            if let Ok(Event::Key(key_event)) = read() {
+                let mut bpm = bpm_clone.lock().unwrap();
+                match key_event.code {
+                    KeyCode::Char('k') => {
+                        *bpm += 1.0;
+                        println!("{:.2} BPM\r", *bpm);
+                        drop(bpm);
+                    }
+                    KeyCode::Char('j') => {
+                        if *bpm > 1.0 {
+                            *bpm -= 1.0;
+                            println!("{:.2} BPM\r", *bpm);
+                            drop(bpm);
+                        }
+                    }
+                    KeyCode::Char('q') => {
+                        println!("Exiting metronome.\r");
+                        drop(bpm);
+                        disable_raw_mode().expect("Failed to disable raw mode\r");
+                        std::process::exit(0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+}
+
+fn progressive_speedup(
+    start_bpm: f64,
+    end_bpm: f64,
+    duration: Option<f64>,
+    measures: Option<u32>,
+    stream_handle: &OutputStreamHandle,
+    bpm: &Arc<Mutex<f64>>,
+) {
+    // Calculate total steps (beats)
+    let total_steps = duration.map_or(u32::MAX, |dur| {
+        // Calculate number of beats over the duration
+        let average_bpm = (start_bpm + end_bpm) / 2.0_f64;
+        (average_bpm * (dur / 60.0)).round() as u32
+    });
+
+    // Calculate BPM increment per step
+    if let Some(measures) = measures {
+        let bpm_increment = if total_steps > 0 {
+            f64::from(measures) * (end_bpm - start_bpm) / f64::from(total_steps)
+        } else {
+            0.0
+        };
+
+        let mut current_bpm = start_bpm;
+
+        for beat in 0..total_steps {
+            // Play the metronome tick
+            play_tick(stream_handle);
+            if beat == 0 {
+                println!("{current_bpm:.2} BPM\r");
+            }
+            key_press_event(bpm);
+
+            // Calculate duration between beats
+            let beat_duration = 60.0 / current_bpm;
+
+            // Wait for the beat duration
+            sleep(Duration::from_secs_f64(beat_duration));
+
+            // Update BPM
+            if beat % measures == measures - 1 {
+                current_bpm += bpm_increment;
+                println!("{current_bpm:.2} BPM\r");
+            }
+        }
+    }
+    println!("{end_bpm:.2} BPM\r");
+}
+
+fn constant_time(bpm: &Arc<Mutex<f64>>, stream_handle: &OutputStreamHandle) {
+    let mut next_beat = Instant::now();
+
+    // Continue at end BPM if desired
+    loop {
+        // Get the current BPM
+        let current_bpm = {
+            let bpm = bpm.lock().unwrap();
+            *bpm
+        };
+        key_press_event(bpm);
+
+        play_tick(stream_handle);
+
+        let beat_duration = 60.0 / current_bpm;
+
+        next_beat += Duration::from_secs_f64(beat_duration);
+
+        let now = Instant::now();
+
+        if next_beat > now {
+            sleep(next_beat - now);
+        } else {
+            next_beat = now;
+        }
+    }
+}
+
+fn main() {
+    // Capture command line arguments
+    let (start_bpm, end_bpm, duration, measures) = capture_arguments();
+
+    // Get an output stream handle to the default physical sound device
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+
+    let bpm = &mut Arc::new(Mutex::new(end_bpm));
+
+    progressive_speedup(start_bpm, end_bpm, duration, measures, &stream_handle, bpm);
+
+    constant_time(bpm, &stream_handle);
 }
