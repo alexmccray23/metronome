@@ -71,19 +71,21 @@ fn capture_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
         .parse::<f64>()
         .expect("Invalid ending BPM");
 
-    let mut duration = matches
+    let duration = matches
         .get_one::<String>("duration")
         .map(|d| d.parse::<f64>().expect("Invalid duration"));
 
-    let mut measures = matches
+    let measures = matches
         .get_one::<String>("measures")
         .map(|b| b.parse::<u32>().expect("Invalid number of measures"));
 
     if duration.is_some() && measures.is_none() {
-        duration = None;
+        eprintln!("Error: --duration must be provided when --measures is specified.");
+        std::process::exit(1);
     }
     if duration.is_none() && measures.is_some() {
-        measures = None;
+        eprintln!("Error: --duration must be provided when --measures is specified.");
+        std::process::exit(1);
     }
 
     println!(
@@ -95,7 +97,7 @@ fn capture_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
     (start_bpm, end_bpm, duration, measures)
 }
 
-fn key_press_event(bpm: &Arc<Mutex<f64>>) {
+fn start_key_listener(bpm: &Arc<Mutex<f64>>) {
     // Clone the Arc to move into the input thread
     let bpm_clone = Arc::clone(bpm);
 
@@ -134,7 +136,7 @@ fn key_press_event(bpm: &Arc<Mutex<f64>>) {
     });
 }
 
-fn progressive_speedup(
+fn run_progressive_metronome(
     start_bpm: f64,
     end_bpm: f64,
     duration: Option<f64>,
@@ -142,6 +144,8 @@ fn progressive_speedup(
     stream_handle: &OutputStreamHandle,
     bpm: &Arc<Mutex<f64>>,
 ) {
+    let mut next_beat = Instant::now();
+
     // Calculate total steps (beats)
     let total_steps = duration.map_or(u32::MAX, |dur| {
         // Calculate number of beats over the duration
@@ -165,13 +169,20 @@ fn progressive_speedup(
             if beat == 0 {
                 println!("{current_bpm:.2} BPM\r");
             }
-            key_press_event(bpm);
+            start_key_listener(bpm);
 
             // Calculate duration between beats
             let beat_duration = 60.0 / current_bpm;
 
-            // Wait for the beat duration
-            sleep(Duration::from_secs_f64(beat_duration));
+            // Schedule the next beat
+            next_beat += Duration::from_secs_f64(beat_duration);
+            let now = Instant::now();
+
+            if next_beat > now {
+                sleep(next_beat - now);
+            } else {
+                next_beat = now;
+            }
 
             // Update BPM
             if beat % measures == measures - 1 {
@@ -183,7 +194,7 @@ fn progressive_speedup(
     println!("{end_bpm:.2} BPM\r");
 }
 
-fn constant_time(bpm: &Arc<Mutex<f64>>, stream_handle: &OutputStreamHandle) {
+fn run_constant_metronome(bpm: &Arc<Mutex<f64>>, stream_handle: &OutputStreamHandle) {
     let mut next_beat = Instant::now();
 
     // Continue at end BPM if desired
@@ -193,7 +204,7 @@ fn constant_time(bpm: &Arc<Mutex<f64>>, stream_handle: &OutputStreamHandle) {
             let bpm = bpm.lock().unwrap();
             *bpm
         };
-        key_press_event(bpm);
+        start_key_listener(bpm);
 
         play_tick(stream_handle);
 
@@ -216,11 +227,11 @@ fn main() {
     let (start_bpm, end_bpm, duration, measures) = capture_arguments();
 
     // Get an output stream handle to the default physical sound device
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+    if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
+        let bpm = &mut Arc::new(Mutex::new(end_bpm));
 
-    let bpm = &mut Arc::new(Mutex::new(end_bpm));
+        run_progressive_metronome(start_bpm, end_bpm, duration, measures, &stream_handle, bpm);
 
-    progressive_speedup(start_bpm, end_bpm, duration, measures, &stream_handle, bpm);
-
-    constant_time(bpm, &stream_handle);
+        run_constant_metronome(bpm, &stream_handle);
+    }
 }
