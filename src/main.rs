@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -43,7 +44,7 @@ async fn run_ui(
     bpm_shared: Arc<Mutex<f64>>,
     running: Arc<AtomicBool>,
     mut rx: mpsc::Receiver<f64>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stdout = std::io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
