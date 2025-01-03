@@ -1,15 +1,21 @@
 use clap::{Arg, Command};
+use crossterm::event::{Event, KeyCode};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+    Terminal,
+};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::io::{BufReader, Cursor};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
-
-use crossterm::event::{read, Event, KeyCode};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use tokio::sync::mpsc;
 
 fn play_tick(stream_handle: &OutputStreamHandle) {
     let sink = Sink::try_new(stream_handle).unwrap();
@@ -24,6 +30,101 @@ fn play_tick(stream_handle: &OutputStreamHandle) {
     // Add the sound to the sink and detach to play asynchronously
     sink.append(tick);
     sink.detach();
+}
+
+#[derive(Debug)]
+struct AppState {
+    current_bpm: f64,
+    target_bpm: f64,
+    is_running: bool,
+}
+
+async fn run_ui(
+    bpm_shared: Arc<Mutex<f64>>,
+    running: Arc<AtomicBool>,
+    mut rx: mpsc::Receiver<f64>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let stdout = std::io::stdout();
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app_state = AppState {
+        current_bpm: 60.0,
+        target_bpm: 60.0,
+        is_running: true,
+    };
+
+    while app_state.is_running {
+        terminal.draw(|f| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(
+                    [
+                        Constraint::Percentage(80),
+                        Constraint::Percentage(20),
+                    ]
+                    .as_ref(),
+                )
+                .split(f.size());
+
+            let bpm_text = vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:.2}", app_state.current_bpm),
+                        Style::default().fg(Color::Green),
+                    ),
+                    Span::raw(" BPM"),
+                ]),
+            ];
+
+            let bpm_block = Paragraph::new(bpm_text)
+                .block(Block::default().borders(Borders::ALL).title("Metronome"));
+            f.render_widget(bpm_block, chunks[0]);
+
+            let controls_text = vec![
+                Line::from("Controls:"),
+                Line::from("  [j/-] Decrease BPM"),
+                Line::from("  [k/+] Increase BPM"),
+                Line::from("  [q]   Quit"),
+            ];
+
+            let controls_block = Paragraph::new(controls_text)
+                .block(Block::default().borders(Borders::ALL).title("Controls"));
+            f.render_widget(controls_block, chunks[1]);
+        })?;
+
+        // Check for BPM updates
+        if let Ok(new_bpm) = rx.try_recv() {
+            app_state.current_bpm = new_bpm;
+        }
+
+        // Check for key events
+        if crossterm::event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = crossterm::event::read()? {
+                match key.code {
+                    KeyCode::Char('k' | '+') => {
+                        let mut bpm = bpm_shared.lock().unwrap();
+                        *bpm += 1.0;
+                        app_state.current_bpm = *bpm;
+                    }
+                    KeyCode::Char('j' | '-') => {
+                        let mut bpm = bpm_shared.lock().unwrap();
+                        if *bpm > 1.0 {
+                            *bpm -= 1.0;
+                            app_state.current_bpm = *bpm;
+                        }
+                    }
+                    KeyCode::Char('q') => {
+                        app_state.is_running = false;
+                        running.store(false, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
@@ -98,46 +199,6 @@ fn parse_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
     (start_bpm, end_bpm, duration, measures)
 }
 
-fn start_key_listener(bpm: Arc<Mutex<f64>>, running: Arc<AtomicBool>) {
-    // Enable raw mode to capture key presses without enter key
-    enable_raw_mode().expect("Failed to enable raw mode");
-
-    // Input thread to listen for key presses
-    thread::spawn(move || {
-        while running.load(Ordering::SeqCst) {
-            // Read an event
-            if let Ok(Event::Key(key_event)) = read() {
-                match key_event.code {
-                    KeyCode::Char('k' | '+') => {
-                        {
-                            let mut bpm = bpm.lock().unwrap();
-                            *bpm += 1.0;
-                            println!("{:.2} BPM\r", *bpm);
-                            drop(bpm);
-                        } // MutexGuard dropped here
-                    }
-                    KeyCode::Char('j' | '-') => {
-                        {
-                            let mut bpm = bpm.lock().unwrap();
-                            if *bpm > 1.0 {
-                                *bpm -= 1.0;
-                                println!("{:.2} BPM\r", *bpm);
-                                drop(bpm);
-                            }
-                        } // MutexGuard dropped here
-                    }
-                    KeyCode::Char('q') => {
-                        println!("Exiting metronome.\r");
-                        running.store(false, Ordering::SeqCst);
-                        disable_raw_mode().expect("Failed to disable raw mode");
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
-}
 
 fn run_progressive_metronome(
     start_bpm: f64,
@@ -240,7 +301,8 @@ fn run_constant_metronome(
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Capture command line arguments
     let (start_bpm, end_bpm, duration_opt, measures_opt) = parse_arguments();
 
@@ -251,28 +313,47 @@ fn main() {
         // Shared running flag for graceful shutdown
         let running = Arc::new(AtomicBool::new(true));
 
-        // Start the key listener thread
-        start_key_listener(Arc::clone(&bpm_shared), Arc::clone(&running));
+        // Create channel for BPM updates
+        let (tx, rx) = mpsc::channel(32);
 
-        // Run progressive metronome if duration and measures are provided
-        if let (Some(duration), Some(measures)) = (duration_opt, measures_opt) {
-            run_progressive_metronome(
-                start_bpm,
-                end_bpm,
-                duration,
-                measures,
-                &stream_handle,
-                &bpm_shared,
-                &running,
-            );
-        }
+        // Clone tx for the metronome thread
+        let metronome_tx = tx.clone();
 
-        // Run constant metronome at the end BPM
-        run_constant_metronome(&bpm_shared, &stream_handle, &running);
+        // Start UI in a separate task
+        let ui_handle = tokio::spawn(run_ui(
+            Arc::clone(&bpm_shared),
+            Arc::clone(&running),
+            rx,
+        ));
 
-        // Disable raw mode before exiting
-        disable_raw_mode().expect("Failed to disable raw mode");
+        // Start metronome in a separate thread
+        let metronome_handle = std::thread::spawn(move || {
+            // Run progressive metronome if duration and measures are provided
+            if let (Some(duration), Some(measures)) = (duration_opt, measures_opt) {
+                run_progressive_metronome(
+                    start_bpm,
+                    end_bpm,
+                    duration,
+                    measures,
+                    &stream_handle,
+                    &bpm_shared,
+                    &running,
+                );
+            }
+
+            // Run constant metronome at the end BPM
+            run_constant_metronome(&bpm_shared, &stream_handle, &running);
+
+            // Send final BPM update
+            let _ = metronome_tx.blocking_send(*bpm_shared.lock().unwrap());
+        });
+
+        // Wait for both tasks to complete
+        let _ = tokio::join!(ui_handle);
+        metronome_handle.join().unwrap();
     } else {
         eprintln!("Error: Unable to access audio output stream.");
     }
+
+    Ok(())
 }
