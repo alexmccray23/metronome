@@ -1,5 +1,9 @@
 use clap::{Arg, Command};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -45,9 +49,18 @@ async fn run_ui(
     running: Arc<AtomicBool>,
     mut rx: mpsc::Receiver<f64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let stdout = std::io::stdout();
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // Cleanup terminal on error
+    let cleanup = || {
+        disable_raw_mode().unwrap();
+        execute!(std::io::stdout(), LeaveAlternateScreen).unwrap();
+    };
 
     let mut app_state = AppState {
         current_bpm: 60.0,
@@ -125,6 +138,9 @@ async fn run_ui(
         }
     }
 
+    // Cleanup terminal
+    disable_raw_mode()?;
+    execute!(std::io::stdout(), LeaveAlternateScreen)?;
     Ok(())
 }
 
