@@ -69,6 +69,12 @@ async fn run_ui(
                 .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
                 .split(f.area());
 
+            let paused_text = if app_state.is_paused {
+                " [PAUSED]".red()
+            } else {
+                "".into()
+            };
+            
             let bpm_text = vec![
                 Line::from(""),
                 Line::from(vec![
@@ -77,6 +83,7 @@ async fn run_ui(
                         Style::default().fg(Color::Green),
                     ),
                     Span::raw(" BPM  "),
+                    paused_text,
                 ]),
             ];
 
@@ -137,35 +144,7 @@ async fn run_ui(
                         paused.store(new_paused, Ordering::SeqCst);
                         app_state.is_paused = new_paused;
                         
-                        // Update the paused state in the UI
-                        let paused_text = if new_paused {
-                            " [PAUSED]".red()
-                        } else {
-                            "".into()
-                        };
-                        let bpm_text = vec![
-                            Line::from(""),
-                            Line::from(vec![
-                                Span::styled(
-                                    format!("{:.2}", app_state.current_bpm),
-                                    Style::default().fg(Color::Green),
-                                ),
-                                Span::raw(" BPM  "),
-                                paused_text,
-                            ]),
-                        ];
-                        let bpm_block = Paragraph::new(bpm_text).centered().block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .title(Line::from(" Metronome ".blue().bold()).centered()),
-                        );
-                        terminal.draw(|f| {
-                            let chunks = Layout::default()
-                                .direction(Direction::Vertical)
-                                .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
-                                .split(f.area());
-                            f.render_widget(bpm_block, chunks[0]);
-                        })?;
+                        // The paused state will now be shown in the main UI loop
                     }
                     _ => {}
                 }
