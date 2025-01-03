@@ -46,6 +46,7 @@ struct AppState {
 async fn run_ui(
     bpm_shared: Arc<Mutex<f64>>,
     running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     start_bpm: f64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Setup terminal
@@ -58,7 +59,7 @@ async fn run_ui(
     let mut app_state = AppState {
         current_bpm: start_bpm,
         is_running: true,
-        is_paused: false,
+        is_paused: paused.load(Ordering::SeqCst),
     };
 
     while app_state.is_running {
@@ -132,9 +133,12 @@ async fn run_ui(
                         running.store(false, Ordering::SeqCst);
                     }
                     KeyCode::Char(' ') => {
-                        app_state.is_paused = !app_state.is_paused;
+                        let new_paused = !paused.load(Ordering::SeqCst);
+                        paused.store(new_paused, Ordering::SeqCst);
+                        app_state.is_paused = new_paused;
+                        
                         // Update the paused state in the UI
-                        let paused_text = if app_state.is_paused {
+                        let paused_text = if new_paused {
                             " [PAUSED]".red()
                         } else {
                             "".into()
@@ -378,6 +382,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_handle = tokio::spawn(run_ui(
             Arc::clone(&bpm_shared),
             Arc::clone(&running),
+            Arc::clone(&paused),
             start_bpm,
         ));
 
