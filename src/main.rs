@@ -40,6 +40,7 @@ fn play_tick(stream_handle: &OutputStreamHandle) {
 struct AppState {
     current_bpm: f64,
     is_running: bool,
+    is_paused: bool,
 }
 
 async fn run_ui(
@@ -57,6 +58,7 @@ async fn run_ui(
     let mut app_state = AppState {
         current_bpm: start_bpm,
         is_running: true,
+        is_paused: false,
     };
 
     while app_state.is_running {
@@ -89,6 +91,8 @@ async fn run_ui(
                 "<J>".blue(),
                 " Increase BPM: ".into(),
                 "<K>".blue(),
+                " Pause/Resume: ".into(),
+                "<Space>".blue(),
                 " Quit: ".into(),
                 "<Q>".blue(),
             ])
@@ -126,6 +130,38 @@ async fn run_ui(
                     KeyCode::Char('q') => {
                         app_state.is_running = false;
                         running.store(false, Ordering::SeqCst);
+                    }
+                    KeyCode::Char(' ') => {
+                        app_state.is_paused = !app_state.is_paused;
+                        // Update the paused state in the UI
+                        let paused_text = if app_state.is_paused {
+                            " [PAUSED]".red()
+                        } else {
+                            "".into()
+                        };
+                        let bpm_text = vec![
+                            Line::from(""),
+                            Line::from(vec![
+                                Span::styled(
+                                    format!("{:.2}", app_state.current_bpm),
+                                    Style::default().fg(Color::Green),
+                                ),
+                                Span::raw(" BPM  "),
+                                paused_text,
+                            ]),
+                        ];
+                        let bpm_block = Paragraph::new(bpm_text).centered().block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title(Line::from(" Metronome ".blue().bold()).centered()),
+                        );
+                        terminal.draw(|f| {
+                            let chunks = Layout::default()
+                                .direction(Direction::Vertical)
+                                .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+                                .split(f.area());
+                            f.render_widget(bpm_block, chunks[0]);
+                        })?;
                     }
                     _ => {}
                 }
@@ -219,6 +255,7 @@ fn run_progressive_metronome(
     stream_handle: &OutputStreamHandle,
     bpm_shared: &Arc<Mutex<f64>>,
     running: &Arc<AtomicBool>,
+    paused: &Arc<AtomicBool>,
 ) {
     // Calculate total beats over the duration
     let average_bpm = (start_bpm + end_bpm) / 2.0;
@@ -239,6 +276,14 @@ fn run_progressive_metronome(
     for beat in 0..total_beats {
         if !running.load(Ordering::SeqCst) {
             break;
+        }
+
+        // Skip if paused
+        while paused.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(100));
+            if !running.load(Ordering::SeqCst) {
+                return;
+            }
         }
 
         // Play the metronome tick
@@ -280,10 +325,19 @@ fn run_constant_metronome(
     bpm_shared: &Arc<Mutex<f64>>,
     stream_handle: &OutputStreamHandle,
     running: &Arc<AtomicBool>,
+    paused: &Arc<AtomicBool>,
 ) {
     let mut next_beat = Instant::now();
 
     while running.load(Ordering::SeqCst) {
+        // Skip if paused
+        while paused.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(100));
+            if !running.load(Ordering::SeqCst) {
+                return;
+            }
+        }
+
         // Get the current BPM
         let current_bpm = {
             let bpm = bpm_shared.lock().unwrap();
@@ -318,14 +372,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bpm_shared = Arc::new(Mutex::new(start_bpm));
         // Shared running flag for graceful shutdown
         let running = Arc::new(AtomicBool::new(true));
+        let paused = Arc::new(AtomicBool::new(false));
 
         // Start UI in a separate task
         let ui_handle = tokio::spawn(run_ui(
             Arc::clone(&bpm_shared),
             Arc::clone(&running),
-            // rx,
             start_bpm,
-            // end_bpm,
         ));
 
         // Start metronome in a separate thread
@@ -340,11 +393,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &stream_handle,
                     &bpm_shared,
                     &running,
+                    &paused,
                 );
             }
 
             // Run constant metronome at the end BPM
-            run_constant_metronome(&bpm_shared, &stream_handle, &running);
+            run_constant_metronome(&bpm_shared, &stream_handle, &running, &paused);
         });
 
         // Wait for both tasks to complete
