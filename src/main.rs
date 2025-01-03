@@ -84,8 +84,15 @@ async fn run_ui(
             );
             f.render_widget(bpm_block, chunks[0]);
 
-            let controls_text =
-                vec![Line::from(vec!["Decrease BPM: ".into(), "<J>".blue(), " Increase BPM: ".into(), "<K>".blue(), " Quit: ".into(), "<Q>".blue()]).centered()];
+            let controls_text = vec![Line::from(vec![
+                "Decrease BPM: ".into(),
+                "<J>".blue(),
+                " Increase BPM: ".into(),
+                "<K>".blue(),
+                " Quit: ".into(),
+                "<Q>".blue(),
+            ])
+            .centered()];
 
             let controls_block = Paragraph::new(controls_text).block(
                 Block::default()
