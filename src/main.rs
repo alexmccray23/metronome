@@ -20,7 +20,7 @@ use std::sync::{
 };
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+// use tokio::sync::mpsc;
 
 fn play_tick(stream_handle: &OutputStreamHandle) {
     let sink = Sink::try_new(stream_handle).unwrap();
@@ -40,14 +40,16 @@ fn play_tick(stream_handle: &OutputStreamHandle) {
 #[derive(Debug)]
 struct AppState {
     current_bpm: f64,
-    target_bpm: f64,
+    // target_bpm: f64,
     is_running: bool,
 }
 
 async fn run_ui(
     bpm_shared: Arc<Mutex<f64>>,
     running: Arc<AtomicBool>,
-    mut rx: mpsc::Receiver<f64>,
+    // mut rx: mpsc::Receiver<f64>,
+    start_bpm: f64,
+    // end_bpm: f64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Setup terminal
     enable_raw_mode()?;
@@ -57,14 +59,15 @@ async fn run_ui(
     let mut terminal = Terminal::new(backend)?;
 
     // Cleanup terminal on error
-    let cleanup = || {
-        disable_raw_mode().unwrap();
-        execute!(std::io::stdout(), LeaveAlternateScreen).unwrap();
-    };
+    // let cleanup = || {
+    //     disable_raw_mode().unwrap();
+    //     execute!(std::io::stdout(), LeaveAlternateScreen).unwrap();
+    // };
+
 
     let mut app_state = AppState {
-        current_bpm: *bpm_shared.lock().unwrap(),
-        target_bpm: *bpm_shared.lock().unwrap(),
+        current_bpm: start_bpm,
+        // target_bpm: end_bpm,
         is_running: true,
     };
 
@@ -79,21 +82,13 @@ async fn run_ui(
                     ]
                     .as_ref(),
                 )
-                .split(f.size());
+                .split(f.area());
 
             let bpm_text = vec![
                 Line::from(vec![
                     Span::styled(
                         format!("{:.2}", app_state.current_bpm),
                         Style::default().fg(Color::Green),
-                    ),
-                    Span::raw(" BPM"),
-                ]),
-                Line::from(vec![
-                    Span::raw("Target: "),
-                    Span::styled(
-                        format!("{:.2}", app_state.target_bpm),
-                        Style::default().fg(Color::Blue),
                     ),
                     Span::raw(" BPM"),
                 ]),
@@ -116,8 +111,11 @@ async fn run_ui(
         })?;
 
         // Check for BPM updates
-        if let Ok(new_bpm) = rx.try_recv() {
-            app_state.current_bpm = new_bpm;
+        // if let Ok(new_bpm) = rx.try_recv() {
+        //     app_state.current_bpm = new_bpm;
+        // }
+        if let Ok(new_bpm) = bpm_shared.lock() {
+            app_state.current_bpm = *new_bpm;
         }
 
         // Check for key events with a shorter timeout
@@ -128,14 +126,12 @@ async fn run_ui(
                         let mut bpm = bpm_shared.lock().unwrap();
                         *bpm += 1.0;
                         app_state.current_bpm = *bpm;
-                        app_state.target_bpm = *bpm;
                     }
                     KeyCode::Char('j' | '-') => {
                         let mut bpm = bpm_shared.lock().unwrap();
                         if *bpm > 1.0 {
                             *bpm -= 1.0;
                             app_state.current_bpm = *bpm;
-                            app_state.target_bpm = *bpm;
                         }
                     }
                     KeyCode::Char('q') => {
@@ -260,7 +256,7 @@ fn run_progressive_metronome(
         // Play the metronome tick
         play_tick(stream_handle);
         if beat == 0 {
-            println!("{current_bpm:.2} BPM\r");
+            // println!("{current_bpm:.2} BPM\r");
         }
 
         // Calculate duration between beats
@@ -280,7 +276,7 @@ fn run_progressive_metronome(
         // Update BPM after each increment
         if (beat + 1) % measures == 0 && (beat + 1) < total_beats {
             current_bpm += bpm_increment;
-            println!("{current_bpm:.2} BPM\r");
+            // println!("{current_bpm:.2} BPM\r");
             // Update the shared BPM
             {
                 let mut bpm = bpm_shared.lock().unwrap();
@@ -294,7 +290,7 @@ fn run_progressive_metronome(
         let mut bpm = bpm_shared.lock().unwrap();
         *bpm = end_bpm;
     }
-    println!("{end_bpm:.2} BPM\r");
+    // println!("{end_bpm:.2} BPM\r");
 }
 
 fn run_constant_metronome(
@@ -336,21 +332,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get an output stream handle to the default physical sound device
     if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
         // Shared BPM variable
-        let bpm_shared = Arc::new(Mutex::new(end_bpm));
+        let bpm_shared = Arc::new(Mutex::new(start_bpm));
         // Shared running flag for graceful shutdown
         let running = Arc::new(AtomicBool::new(true));
 
         // Create channel for BPM updates
-        let (tx, rx) = mpsc::channel(32);
+        // let (tx, rx) = mpsc::channel(32);
 
         // Clone tx for the metronome thread
-        let metronome_tx = tx.clone();
+        // let metronome_tx = tx.clone();
 
         // Start UI in a separate task
         let ui_handle = tokio::spawn(run_ui(
             Arc::clone(&bpm_shared),
             Arc::clone(&running),
-            rx,
+            // rx,
+            start_bpm,
+            // end_bpm,
         ));
 
         // Start metronome in a separate thread
@@ -372,7 +370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_constant_metronome(&bpm_shared, &stream_handle, &running);
 
             // Send final BPM update
-            let _ = metronome_tx.blocking_send(*bpm_shared.lock().unwrap());
+            // let _ = metronome_tx.blocking_send(*bpm_shared.lock().unwrap());
         });
 
         // Wait for both tasks to complete
