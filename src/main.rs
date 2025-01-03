@@ -1,5 +1,5 @@
 use clap::{Arg, Command};
-use crossterm::event::{Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -99,9 +99,9 @@ async fn run_ui(
             app_state.current_bpm = new_bpm;
         }
 
-        // Check for key events
-        if crossterm::event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = crossterm::event::read()? {
+        // Check for key events with a shorter timeout
+        if event::poll(Duration::from_millis(16))? {  // ~60Hz polling
+            if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('k' | '+') => {
                         let mut bpm = bpm_shared.lock().unwrap();
