@@ -63,8 +63,8 @@ async fn run_ui(
     };
 
     let mut app_state = AppState {
-        current_bpm: 60.0,
-        target_bpm: 60.0,
+        current_bpm: *bpm_shared.lock().unwrap(),
+        target_bpm: *bpm_shared.lock().unwrap(),
         is_running: true,
     };
 
@@ -86,6 +86,14 @@ async fn run_ui(
                     Span::styled(
                         format!("{:.2}", app_state.current_bpm),
                         Style::default().fg(Color::Green),
+                    ),
+                    Span::raw(" BPM"),
+                ]),
+                Line::from(vec![
+                    Span::raw("Target: "),
+                    Span::styled(
+                        format!("{:.2}", app_state.target_bpm),
+                        Style::default().fg(Color::Blue),
                     ),
                     Span::raw(" BPM"),
                 ]),
@@ -120,12 +128,14 @@ async fn run_ui(
                         let mut bpm = bpm_shared.lock().unwrap();
                         *bpm += 1.0;
                         app_state.current_bpm = *bpm;
+                        app_state.target_bpm = *bpm;
                     }
                     KeyCode::Char('j' | '-') => {
                         let mut bpm = bpm_shared.lock().unwrap();
                         if *bpm > 1.0 {
                             *bpm -= 1.0;
                             app_state.current_bpm = *bpm;
+                            app_state.target_bpm = *bpm;
                         }
                     }
                     KeyCode::Char('q') => {
