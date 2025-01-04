@@ -21,8 +21,15 @@ use std::sync::{
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-fn play_tick(stream_handle: &OutputStreamHandle) {
+fn play_tick(stream_handle: &OutputStreamHandle, paused: &Arc<AtomicBool>) {
     let sink = Sink::try_new(stream_handle).unwrap();
+
+    // Pause playback if paused
+    if paused.load(Ordering::SeqCst) {
+        sink.pause();
+    } else {
+        sink.play();
+    }
 
     // Embed the audio file into the binary
     let audio_data = include_bytes!("../assets/audio.ogg");
@@ -41,6 +48,47 @@ struct AppState {
     current_bpm: f64,
     is_running: bool,
     is_paused: bool,
+}
+
+impl AppState {
+    fn handle_key_event(
+        &mut self,
+        bpm_shared: &Arc<Mutex<f64>>,
+        running: &Arc<AtomicBool>,
+        paused: &Arc<AtomicBool>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Check for key events with a shorter timeout
+        if event::poll(Duration::from_millis(16))? {
+            // ~60Hz polling
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('k') => {
+                        let mut bpm = bpm_shared.lock().unwrap();
+                        *bpm += 1.0;
+                        self.current_bpm = *bpm;
+                    }
+                    KeyCode::Char('j') => {
+                        let mut bpm = bpm_shared.lock().unwrap();
+                        if *bpm > 1.0 {
+                            *bpm -= 1.0;
+                            self.current_bpm = *bpm;
+                        }
+                    }
+                    KeyCode::Char('q') => {
+                        self.is_running = false;
+                        running.store(false, Ordering::SeqCst);
+                    }
+                    KeyCode::Char(' ') => {
+                        let new_paused = !paused.load(Ordering::SeqCst);
+                        paused.store(new_paused, Ordering::SeqCst);
+                        self.is_paused = new_paused;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 async fn run_ui(
@@ -74,7 +122,7 @@ async fn run_ui(
             } else {
                 "".into()
             };
-            
+
             let bpm_text = vec![
                 Line::from(""),
                 Line::from(vec![
@@ -119,37 +167,7 @@ async fn run_ui(
         }
 
         // Check for key events with a shorter timeout
-        if event::poll(Duration::from_millis(16))? {
-            // ~60Hz polling
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('k') => {
-                        let mut bpm = bpm_shared.lock().unwrap();
-                        *bpm += 1.0;
-                        app_state.current_bpm = *bpm;
-                    }
-                    KeyCode::Char('j') => {
-                        let mut bpm = bpm_shared.lock().unwrap();
-                        if *bpm > 1.0 {
-                            *bpm -= 1.0;
-                            app_state.current_bpm = *bpm;
-                        }
-                    }
-                    KeyCode::Char('q') => {
-                        app_state.is_running = false;
-                        running.store(false, Ordering::SeqCst);
-                    }
-                    KeyCode::Char(' ') => {
-                        let new_paused = !paused.load(Ordering::SeqCst);
-                        paused.store(new_paused, Ordering::SeqCst);
-                        app_state.is_paused = new_paused;
-                        
-                        // The paused state will now be shown in the main UI loop
-                    }
-                    _ => {}
-                }
-            }
-        }
+        app_state.handle_key_event(&bpm_shared, &running, &paused)?;
     }
 
     // Cleanup terminal
@@ -162,7 +180,7 @@ fn parse_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
     // Set up command-line argument parsing
     let matches = Command::new("Metronome")
         .version("1.0")
-        .about("A simple metronome that can progressively speed up")
+        .about("A simple TUI metronome that can progressively speed up")
         .arg(
             Arg::new("start-bpm")
                 .short('s')
@@ -220,46 +238,57 @@ fn parse_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
         std::process::exit(1);
     }
 
-    println!(
-        "Metronome started from {start_bpm:.2} BPM to {end_bpm:.2} BPM.\n\
-        Press 'K' to increase the BPM by 1\n\
-        Press 'J' to decrease the BPM by 1\n\
-        Press 'Q' to quit\r"
-    );
-
     (start_bpm, end_bpm, duration, measures)
 }
 
-fn run_progressive_metronome(
+struct Args {
     start_bpm: f64,
     end_bpm: f64,
     duration: f64,
     measures: u32,
+}
+
+impl Args {
+    const fn new(start_bpm: f64, end_bpm: f64, duration: f64, measures: u32) -> Self {
+        Self {
+            start_bpm,
+            end_bpm,
+            duration,
+            measures,
+        }
+    }
+}
+
+fn run_progressive_metronome(
+    args: &Args,
     stream_handle: &OutputStreamHandle,
     bpm_shared: &Arc<Mutex<f64>>,
     running: &Arc<AtomicBool>,
     paused: &Arc<AtomicBool>,
 ) {
     // Calculate total beats over the duration
-    let average_bpm = (start_bpm + end_bpm) / 2.0;
+    let average_bpm = (args.start_bpm + args.end_bpm) / 2.0;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let total_beats = (average_bpm * (duration / 60.0)).round() as u32;
+    let total_beats = (average_bpm * (args.duration / 60.0)).round() as u32;
 
     // Calculate the number of increments and BPM increment size
-    let num_increments = total_beats / measures;
+    let num_increments = total_beats / args.measures;
     let bpm_increment = if num_increments > 0 {
-        (end_bpm - start_bpm) / f64::from(num_increments)
+        (args.end_bpm - args.start_bpm) / f64::from(num_increments)
     } else {
         0.0
     };
 
-    let mut current_bpm = start_bpm;
+    let mut current_bpm = args.start_bpm;
     let mut next_beat = Instant::now();
 
     for beat in 0..total_beats {
         if !running.load(Ordering::SeqCst) {
             break;
         }
+
+        // Play the metronome tick
+        play_tick(stream_handle, paused);
 
         // Skip if paused
         while paused.load(Ordering::SeqCst) {
@@ -268,9 +297,6 @@ fn run_progressive_metronome(
                 return;
             }
         }
-
-        // Play the metronome tick
-        play_tick(stream_handle);
 
         // Calculate duration between beats
         let beat_duration = 60.0 / current_bpm;
@@ -287,7 +313,7 @@ fn run_progressive_metronome(
         }
 
         // Update BPM after each increment
-        if (beat + 1) % measures == 0 && (beat + 1) < total_beats {
+        if (beat + 1) % args.measures == 0 && (beat + 1) < total_beats {
             current_bpm += bpm_increment;
             // Update the shared BPM
             {
@@ -300,7 +326,7 @@ fn run_progressive_metronome(
     // Ensure shared BPM is set to end_bpm
     {
         let mut bpm = bpm_shared.lock().unwrap();
-        *bpm = end_bpm;
+        *bpm = args.end_bpm;
     }
 }
 
@@ -313,21 +339,13 @@ fn run_constant_metronome(
     let mut next_beat = Instant::now();
 
     while running.load(Ordering::SeqCst) {
-        // Skip if paused
-        while paused.load(Ordering::SeqCst) {
-            sleep(Duration::from_millis(100));
-            if !running.load(Ordering::SeqCst) {
-                return;
-            }
-        }
-
         // Get the current BPM
         let current_bpm = {
             let bpm = bpm_shared.lock().unwrap();
             *bpm
         };
 
-        play_tick(stream_handle);
+        play_tick(stream_handle, paused);
 
         let beat_duration = 60.0 / current_bpm;
 
@@ -369,16 +387,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let metronome_handle = std::thread::spawn(move || {
             // Run progressive metronome if duration and measures are provided
             if let (Some(duration), Some(measures)) = (duration_opt, measures_opt) {
-                run_progressive_metronome(
-                    start_bpm,
-                    end_bpm,
-                    duration,
-                    measures,
-                    &stream_handle,
-                    &bpm_shared,
-                    &running,
-                    &paused,
-                );
+                let args = Args::new(start_bpm, end_bpm, duration, measures);
+                run_progressive_metronome(&args, &stream_handle, &bpm_shared, &running, &paused);
             }
 
             // Run constant metronome at the end BPM
