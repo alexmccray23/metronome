@@ -22,10 +22,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Start UI and metronome
         let ui_handle = start_ui(&bpm_shared, &running, &paused, start_bpm);
         start_metronome(
-            &stream_handle,
-            &bpm_shared,
-            &running,
-            &paused,
+            stream_handle,
+            bpm_shared,
+            running,
+            paused,
             start_bpm,
             end_bpm,
             duration_opt,
@@ -56,10 +56,10 @@ fn start_ui(
 }
 
 fn start_metronome(
-    stream_handle: &OutputStreamHandle,
-    bpm_shared: &Arc<Mutex<f64>>,
-    running: &Arc<AtomicBool>,
-    paused: &Arc<AtomicBool>,
+    stream_handle: OutputStreamHandle,
+    bpm_shared: Arc<Mutex<f64>>,
+    running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     start_bpm: f64,
     end_bpm: f64,
     duration_opt: Option<f64>,
@@ -68,8 +68,8 @@ fn start_metronome(
     std::thread::spawn(move || {
         if let (Some(duration), Some(measures)) = (duration_opt, measures_opt) {
             let args = metronome::ProgressiveArgs::new(start_bpm, end_bpm, duration, measures);
-            metronome::run_progressive(&args, stream_handle, bpm_shared, running, paused);
+            metronome::run_progressive(&args, &stream_handle, &bpm_shared, &running, &paused);
         }
-        metronome::run_constant(bpm_shared, stream_handle, running, paused);
+        metronome::run_constant(&bpm_shared, &stream_handle, &running, &paused);
     });
 }

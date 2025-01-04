@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use std::time::Duration;
 
 pub struct AppState {
