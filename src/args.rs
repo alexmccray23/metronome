@@ -2,7 +2,7 @@ use clap::{Arg, Command};
 
 pub fn parse_arguments() -> (f64, f64, Option<f64>, Option<u32>) {
     let matches = Command::new("Metronome")
-        .version("1.0")
+        .version("1.1")
         .about("A simple TUI metronome that can progressively speed up")
         .arg(
             Arg::new("start-bpm")
