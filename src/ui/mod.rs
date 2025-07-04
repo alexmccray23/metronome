@@ -11,21 +11,20 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
+use std::sync::{atomic::Ordering, Arc, Mutex};
 use std::time::Duration;
+use crate::state::{AtomicMetronomeState, MetronomeState};
 
 pub struct AppState {
     current_bpm: f64,
-    is_running: bool,
-    is_paused: bool,
+    state: MetronomeState,
 }
 
 impl AppState {
     fn handle_key_event(
         &mut self,
         bpm_shared: &Arc<Mutex<f64>>,
-        running: &AtomicBool,
-        paused: &AtomicBool,
+        state: &AtomicMetronomeState,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
@@ -43,13 +42,18 @@ impl AppState {
                         }
                     }
                     KeyCode::Char('q') => {
-                        self.is_running = false;
-                        running.store(false, Ordering::SeqCst);
+                        self.state = MetronomeState::Stopped;
+                        state.store(MetronomeState::Stopped, Ordering::SeqCst);
                     }
                     KeyCode::Char(' ') => {
-                        let new_paused = !paused.load(Ordering::SeqCst);
-                        paused.store(new_paused, Ordering::SeqCst);
-                        self.is_paused = new_paused;
+                        let current_state = state.load(Ordering::SeqCst);
+                        let new_state = match current_state {
+                            MetronomeState::Running => MetronomeState::Paused,
+                            MetronomeState::Paused => MetronomeState::Running,
+                            MetronomeState::Stopped => MetronomeState::Stopped,
+                        };
+                        state.store(new_state, Ordering::SeqCst);
+                        self.state = new_state;
                     }
                     _ => {}
                 }
@@ -61,8 +65,7 @@ impl AppState {
 
 pub async fn run(
     bpm_shared: Arc<Mutex<f64>>,
-    running: Arc<AtomicBool>,
-    paused: Arc<AtomicBool>,
+    state: Arc<AtomicMetronomeState>,
     start_bpm: f64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     enable_raw_mode()?;
@@ -73,18 +76,17 @@ pub async fn run(
 
     let mut app_state = AppState {
         current_bpm: start_bpm,
-        is_running: true,
-        is_paused: paused.load(Ordering::SeqCst),
+        state: state.load(Ordering::SeqCst),
     };
 
-    while app_state.is_running {
+    while app_state.state != MetronomeState::Stopped {
         terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
                 .split(f.area());
 
-            let paused_text = if app_state.is_paused {
+            let paused_text = if app_state.state == MetronomeState::Paused {
                 " [PAUSED]".red()
             } else {
                 "".into()
@@ -133,7 +135,8 @@ pub async fn run(
             app_state.current_bpm = *new_bpm;
         }
 
-        app_state.handle_key_event(&bpm_shared, &running, &paused)?;
+        app_state.state = state.load(Ordering::SeqCst);
+        app_state.handle_key_event(&bpm_shared, &state)?;
     }
 
     disable_raw_mode()?;

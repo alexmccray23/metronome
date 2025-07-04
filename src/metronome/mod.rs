@@ -1,8 +1,9 @@
 use std::sync::atomic::Ordering;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use rodio::OutputStreamHandle;
+use crate::state::{AtomicMetronomeState, MetronomeState};
 
 pub struct ProgressiveArgs {
     pub start_bpm: f64,
@@ -26,8 +27,7 @@ pub fn run_progressive(
     args: &ProgressiveArgs,
     stream_handle: &OutputStreamHandle,
     bpm_shared: &Arc<Mutex<f64>>,
-    running: &AtomicBool,
-    paused: &AtomicBool,
+    state: &AtomicMetronomeState,
 ) {
     let average_bpm = (args.start_bpm + args.end_bpm) / 2.0;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -44,15 +44,18 @@ pub fn run_progressive(
     let mut next_beat = Instant::now();
 
     for beat in 0..total_beats {
-        if !running.load(Ordering::SeqCst) {
+        let current_state = state.load(Ordering::SeqCst);
+        if current_state == MetronomeState::Stopped {
             break;
         }
 
-        super::audio::play_tick(stream_handle, paused);
+        if current_state == MetronomeState::Running {
+            super::audio::play_tick(stream_handle);
+        }
 
-        while paused.load(Ordering::SeqCst) {
+        while state.load(Ordering::SeqCst) == MetronomeState::Paused {
             sleep(Duration::from_millis(100));
-            if !running.load(Ordering::SeqCst) {
+            if state.load(Ordering::SeqCst) == MetronomeState::Stopped {
                 return;
             }
         }
@@ -85,27 +88,34 @@ pub fn run_progressive(
 pub fn run_constant(
     bpm_shared: &Arc<Mutex<f64>>,
     stream_handle: &OutputStreamHandle,
-    running: &AtomicBool,
-    paused: &AtomicBool,
+    state: &AtomicMetronomeState,
 ) {
     let mut next_beat = Instant::now();
 
-    while running.load(Ordering::SeqCst) {
+    while state.load(Ordering::SeqCst) != MetronomeState::Stopped {
         let current_bpm = {
             let bpm = bpm_shared.lock().unwrap();
             *bpm
         };
 
-        super::audio::play_tick(stream_handle, paused);
+        let current_state = state.load(Ordering::SeqCst);
+        if current_state == MetronomeState::Running {
+            super::audio::play_tick(stream_handle);
+        }
 
-        let beat_duration = 60.0 / current_bpm;
-        next_beat += Duration::from_secs_f64(beat_duration);
+        if current_state == MetronomeState::Running {
+            let beat_duration = 60.0 / current_bpm;
+            next_beat += Duration::from_secs_f64(beat_duration);
 
-        let now = Instant::now();
-        if next_beat > now {
-            sleep(next_beat - now);
-        } else {
-            next_beat = now;
+            let now = Instant::now();
+            if next_beat > now {
+                sleep(next_beat - now);
+            } else {
+                next_beat = now;
+            }
+        } else if current_state == MetronomeState::Paused {
+            sleep(Duration::from_millis(100));
+            next_beat = Instant::now();
         }
     }
 }

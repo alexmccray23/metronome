@@ -1,11 +1,13 @@
 mod args;
 mod audio;
 mod metronome;
+mod state;
 mod ui;
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use rodio::OutputStreamHandle;
+use state::{AtomicMetronomeState, MetronomeState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,16 +18,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok((_stream, stream_handle)) = rodio::OutputStream::try_default() {
         // Shared state
         let bpm_shared = Arc::new(Mutex::new(start_bpm));
-        let running = Arc::new(AtomicBool::new(true));
-        let paused = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(AtomicMetronomeState::new(MetronomeState::Running));
 
         // Start UI and metronome
-        let ui_handle = start_ui(&bpm_shared, &running, &paused, start_bpm);
+        let ui_handle = start_ui(&bpm_shared, &state, start_bpm);
         start_metronome(
             stream_handle,
             bpm_shared,
-            running,
-            paused,
+            state,
             start_bpm,
             end_bpm,
             duration_opt,
@@ -43,14 +43,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn start_ui(
     bpm_shared: &Arc<Mutex<f64>>,
-    running: &Arc<AtomicBool>,
-    paused: &Arc<AtomicBool>,
+    state: &Arc<AtomicMetronomeState>,
     start_bpm: f64,
 ) -> JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
     tokio::spawn(ui::run(
         Arc::clone(bpm_shared),
-        Arc::clone(running),
-        Arc::clone(paused),
+        Arc::clone(state),
         start_bpm,
     ))
 }
@@ -58,8 +56,7 @@ fn start_ui(
 fn start_metronome(
     stream_handle: OutputStreamHandle,
     bpm_shared: Arc<Mutex<f64>>,
-    running: Arc<AtomicBool>,
-    paused: Arc<AtomicBool>,
+    state: Arc<AtomicMetronomeState>,
     start_bpm: f64,
     end_bpm: f64,
     duration_opt: Option<f64>,
@@ -68,8 +65,8 @@ fn start_metronome(
     std::thread::spawn(move || {
         if let (Some(duration), Some(measures)) = (duration_opt, measures_opt) {
             let args = metronome::ProgressiveArgs::new(start_bpm, end_bpm, duration, measures);
-            metronome::run_progressive(&args, &stream_handle, &bpm_shared, &running, &paused);
+            metronome::run_progressive(&args, &stream_handle, &bpm_shared, &state);
         }
-        metronome::run_constant(&bpm_shared, &stream_handle, &running, &paused);
+        metronome::run_constant(&bpm_shared, &stream_handle, &state);
     });
 }
