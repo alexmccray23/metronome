@@ -29,7 +29,7 @@ pub fn run_progressive(
     bpm_shared: &Arc<Mutex<f64>>,
     state: &AtomicMetronomeState,
 ) {
-    let average_bpm = (args.start_bpm + args.end_bpm) / 2.0;
+    let average_bpm = f64::midpoint(args.start_bpm, args.end_bpm);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let total_beats = (average_bpm * (args.duration / 60.0)).round() as u32;
 

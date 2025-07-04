@@ -2,6 +2,7 @@ mod args;
 mod audio;
 mod metronome;
 mod state;
+mod tap_tempo;
 mod ui;
 
 use std::sync::{Arc, Mutex};

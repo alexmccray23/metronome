@@ -14,10 +14,12 @@ use ratatui::{
 use std::sync::{atomic::Ordering, Arc, Mutex};
 use std::time::Duration;
 use crate::state::{AtomicMetronomeState, MetronomeState};
+use crate::tap_tempo::TapTempo;
 
 pub struct AppState {
     current_bpm: f64,
     state: MetronomeState,
+    tap_tempo: TapTempo,
 }
 
 impl AppState {
@@ -55,6 +57,15 @@ impl AppState {
                         state.store(new_state, Ordering::SeqCst);
                         self.state = new_state;
                     }
+                    KeyCode::Char('g' | 'G') => {
+                        if let Some(bpm) = self.tap_tempo.tap() {
+                            {
+                                let mut shared_bpm = bpm_shared.lock().unwrap();
+                                *shared_bpm = bpm;
+                            }
+                            self.current_bpm = bpm;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -77,6 +88,7 @@ pub async fn run(
     let mut app_state = AppState {
         current_bpm: start_bpm,
         state: state.load(Ordering::SeqCst),
+        tap_tempo: TapTempo::new(),
     };
 
     while app_state.state != MetronomeState::Stopped {
@@ -92,6 +104,12 @@ pub async fn run(
                 "".into()
             };
 
+            let tap_text = if app_state.tap_tempo.is_tapping() {
+                format!(" [TAP: {}]", app_state.tap_tempo.get_tap_count()).yellow()
+            } else {
+                "".into()
+            };
+
             let bpm_text = vec![
                 Line::from(""),
                 Line::from(vec![
@@ -101,6 +119,7 @@ pub async fn run(
                     ),
                     Span::raw(" BPM  "),
                     paused_text,
+                    tap_text,
                 ]),
             ];
 
@@ -111,17 +130,23 @@ pub async fn run(
             );
             f.render_widget(bpm_block, chunks[0]);
 
-            let controls_text = vec![Line::from(vec![
-                "Decrease BPM: ".into(),
-                "<J>".blue(),
-                " Increase BPM: ".into(),
-                "<K>".blue(),
-                " Pause/Resume: ".into(),
-                "<Space>".blue(),
-                " Quit: ".into(),
-                "<Q>".blue(),
-            ])
-            .centered()];
+            let controls_text = vec![
+                Line::from(vec![
+                    "Decrease BPM: ".into(),
+                    "<J>".blue(),
+                    " Increase BPM: ".into(),
+                    "<K>".blue(),
+                    " Pause/Resume: ".into(),
+                    "<Space>".blue(),
+                    " Quit: ".into(),
+                    "<Q>".blue(),
+                ]).centered(),
+                Line::from(vec![
+                    "Tap Tempo: ".into(),
+                    "<G>".blue(),
+                    " (Press repeatedly to set tempo)".into(),
+                ]).centered(),
+            ];
 
             let controls_block = Paragraph::new(controls_text).block(
                 Block::default()
