@@ -20,7 +20,7 @@ A terminal-based metronome application built in Rust with a clean TUI interface.
 ### Building from Source
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/alexmccray23/metronome.git
 cd metronome
 cargo build --release
 ```
