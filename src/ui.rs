@@ -49,19 +49,19 @@ impl AppState {
         state: &AtomicMetronomeState,
     ) {
         match key.code {
-            KeyCode::Char('k') => {
+            KeyCode::Char('k' | 'K') => {
                 let mut bpm = bpm_shared.lock().unwrap();
                 *bpm += 1.0;
                 self.current_bpm = *bpm;
             }
-            KeyCode::Char('j') => {
+            KeyCode::Char('j' | 'J') => {
                 let mut bpm = bpm_shared.lock().unwrap();
                 if *bpm > 1.0 {
                     *bpm -= 1.0;
                     self.current_bpm = *bpm;
                 }
             }
-            KeyCode::Char('q') => {
+            KeyCode::Char('q' | 'Q') => {
                 self.state = MetronomeState::Stopped;
                 state.store(MetronomeState::Stopped, Ordering::SeqCst);
             }
@@ -150,7 +150,7 @@ pub async fn run(
             let chunks = if app_state.input_mode {
                 Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(60), Constraint::Length(3), Constraint::Percentage(37)].as_ref())
+                    .constraints([Constraint::Percentage(60), Constraint::Percentage(20), Constraint::Percentage(20)].as_ref())
                     .split(f.area())
             } else {
                 Layout::default()
@@ -194,6 +194,7 @@ pub async fn run(
             // Render input field if in input mode
             if app_state.input_mode {
                 let input_text = vec![
+                    Line::from(""),
                     Line::from(vec![
                         "Enter BPM: ".into(),
                         Span::styled(

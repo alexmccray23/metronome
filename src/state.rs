@@ -2,9 +2,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum MetronomeState {
-    Running = 0,
-    Paused = 1,
-    Stopped = 2,
+    Running,
+    Paused,
+    Stopped,
 }
 
 impl From<u8> for MetronomeState {
@@ -34,18 +34,5 @@ impl AtomicMetronomeState {
 
     pub fn store(&self, state: MetronomeState, ordering: Ordering) {
         self.state.store(state as u8, ordering);
-    }
-
-    pub fn _compare_exchange(
-        &self,
-        current: MetronomeState,
-        new: MetronomeState,
-        success: Ordering,
-        failure: Ordering,
-    ) -> Result<MetronomeState, MetronomeState> {
-        match self.state.compare_exchange(current as u8, new as u8, success, failure) {
-            Ok(value) => Ok(MetronomeState::from(value)),
-            Err(value) => Err(MetronomeState::from(value)),
-        }
     }
 }

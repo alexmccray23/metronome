@@ -26,7 +26,6 @@ impl TapTempo {
     pub fn tap(&mut self) -> Option<f64> {
         let now = Instant::now();
         
-        // Clear old taps if timeout exceeded
         if let Some(last_tap) = self.tap_times.last() {
             if now.duration_since(*last_tap) > self.tap_timeout {
                 self.tap_times.clear();
@@ -37,12 +36,10 @@ impl TapTempo {
         self.tap_times.push(now);
         self.is_tapping = true;
 
-        // Keep only the most recent taps
         if self.tap_times.len() > MAX_TAP_HISTORY {
             self.tap_times.remove(0);
         }
 
-        // Need at least 2 taps to calculate BPM
         if self.tap_times.len() < 2 {
             return None;
         }
@@ -57,21 +54,17 @@ impl TapTempo {
             return None;
         }
 
-        // Calculate intervals between consecutive taps
         let intervals: Vec<Duration> = self.tap_times
             .windows(2)
             .map(|pair| pair[1].duration_since(pair[0]))
             .collect();
 
-        // Calculate average interval
         let total_duration: Duration = intervals.iter().sum();
         #[allow(clippy::cast_precision_loss)]
         let avg_interval_ms = total_duration.as_millis() as f64 / intervals.len() as f64;
 
-        // Convert to BPM (60000 ms per minute)
         let bpm = 60000.0 / avg_interval_ms;
 
-        // Clamp to reasonable bounds
         if (MIN_BPM..=MAX_BPM).contains(&bpm) {
             Some(bpm)
         } else {
@@ -84,7 +77,6 @@ impl TapTempo {
             return false;
         }
 
-        // Check if we're still within the tap timeout
         if let Some(last_tap) = self.tap_times.last() {
             let elapsed = Instant::now().duration_since(*last_tap);
             if elapsed > self.tap_timeout {
@@ -101,16 +93,6 @@ impl TapTempo {
         } else {
             0
         }
-    }
-
-    pub const fn _get_last_bpm(&self) -> Option<f64> {
-        self.last_calculated_bpm
-    }
-
-    pub fn _clear(&mut self) {
-        self.tap_times.clear();
-        self.last_calculated_bpm = None;
-        self.is_tapping = false;
     }
 }
 
